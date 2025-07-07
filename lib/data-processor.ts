@@ -9,7 +9,7 @@ export interface EmissionZone {
   status: 'active' | 'upcoming' | 'inactive';
   validFrom?: string;
   validTo?: string;
-  coordinates: [number, number][];
+  coordinates: [number, number][][] | [number, number][]; // Support both multi-polygon and single polygon
   url?: string;
   restrictions: string[];
   exemptions: string[];
@@ -391,9 +391,7 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
     
     cityPolygons.forEach((cityData, cityName) => {
       if (cityData.coordinates.length > 0) {
-        // Combineer alle polygon coordinaten in één grote array
-        const allCoordinates: [number, number][] = cityData.coordinates.flat();
-        
+        // Combineer alle polygonen in één zone met multi-polygon ondersteuning
         const zone: EmissionZone = {
           id: cityData.id,
           name: cityName,
@@ -401,19 +399,21 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
           type: cityData.zoneType,
           status: determineStatus(cityData.startDate),
           validFrom: cityData.startDate,
-          coordinates: allCoordinates,
+          coordinates: cityData.coordinates.length === 1 
+            ? cityData.coordinates[0] // Enkele polygon als flat array
+            : cityData.coordinates,   // Multiple polygons als array van arrays
           restrictions: ['Dieselvoertuigen', 'Oude voertuigen'],
           exemptions: ['Elektrische voertuigen', 'Waterstof voertuigen', 'Oldtimers'],
           url: cityData.infoUrl,
           authority: cityData.authority || extractCity(cityName)
         };
         
-        console.log(`🏛️ Created combined zone: ${zone.name} with ${cityData.coordinates.length} polygons and ${allCoordinates.length} total coordinates`);
+        console.log(`🏛️ Created combined zone: ${zone.name} with ${cityData.coordinates.length} polygon(s) containing ${cityData.coordinates.flat().length} total coordinates`);
         allZones.push(zone);
       }
     });
     
-    console.log(`🎉 Total combined zones processed: ${allZones.length}`);
+    console.log(`🎉 Total zones processed: ${allZones.length}`);
     return allZones;
     
   } catch (error) {

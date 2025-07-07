@@ -13,8 +13,18 @@ function MapController({ zones }: { zones: EmissionZone[] }) {
     console.log('🗺️ MapController: zones changed', zones.length);
     
     if (zones.length > 0) {
-      // Calculate bounds from all zone coordinates
-      const allCoords = zones.flatMap(zone => zone.coordinates);
+      // Calculate bounds from all zone coordinates, handling both single and multi-polygon
+      const allCoords: [number, number][] = zones.flatMap(zone => {
+        // Check if coordinates are multi-polygon format
+        if (Array.isArray(zone.coordinates[0]) && Array.isArray(zone.coordinates[0][0])) {
+          // Multi-polygon: flatten all polygons
+          return (zone.coordinates as [number, number][][]).flat();
+        } else {
+          // Single polygon
+          return zone.coordinates as [number, number][];
+        }
+      });
+      
       console.log('🗺️ Total coordinates for bounds:', allCoords.length);
       
       if (allCoords.length > 0) {
@@ -101,18 +111,41 @@ export default function EmissionZoneMap({ zones, selectedZone, onZoneSelect }: E
         {zones.map((zone) => {
           console.log(`🗺️ Rendering zone: ${zone.name}`, {
             id: zone.id,
-            coordinatesCount: zone.coordinates.length,
-            firstCoordinate: zone.coordinates[0],
-            lastCoordinate: zone.coordinates[zone.coordinates.length - 1],
-            bounds: zone.coordinates.length > 0 ? {
-              minLat: Math.min(...zone.coordinates.map(c => c[0])),
-              maxLat: Math.max(...zone.coordinates.map(c => c[0])),
-              minLng: Math.min(...zone.coordinates.map(c => c[1])),
-              maxLng: Math.max(...zone.coordinates.map(c => c[1]))
-            } : null
+            coordinatesStructure: Array.isArray(zone.coordinates[0]) 
+              ? Array.isArray(zone.coordinates[0][0]) 
+                ? 'multi-polygon' 
+                : 'single-polygon'
+              : 'invalid',
+            polygonCount: Array.isArray(zone.coordinates[0]) && Array.isArray(zone.coordinates[0][0]) 
+              ? zone.coordinates.length 
+              : 1,
+            totalCoords: Array.isArray(zone.coordinates[0]) && Array.isArray(zone.coordinates[0][0])
+              ? (zone.coordinates as [number, number][][]).flat().length
+              : (zone.coordinates as [number, number][]).length
           });
           
-          if (zone.coordinates.length === 0) return null;
+          if (!zone.coordinates || zone.coordinates.length === 0) {
+            console.warn(`⚠️ Zone ${zone.name} has no coordinates - skipping`);
+            return null;
+          }
+          
+          // Determine if this is a multi-polygon or single polygon
+          const isMultiPolygon = Array.isArray(zone.coordinates[0]) && Array.isArray(zone.coordinates[0][0]);
+          const polygonPositions = isMultiPolygon 
+            ? (zone.coordinates as [number, number][][])
+            : [zone.coordinates as [number, number][]];
+          
+          // Validate coordinates are properly formatted
+          const allCoords = polygonPositions.flat();
+          const hasValidCoords = allCoords.every((coord: any) => 
+            Array.isArray(coord) && coord.length === 2 && 
+            typeof coord[0] === 'number' && typeof coord[1] === 'number'
+          );
+          
+          if (!hasValidCoords) {
+            console.error(`❌ Zone ${zone.name} has invalid coordinate format`);
+            return null;
+          }
           
           const color = getZoneColor(zone);
           const isSelected = selectedZone?.id === zone.id;
@@ -120,7 +153,7 @@ export default function EmissionZoneMap({ zones, selectedZone, onZoneSelect }: E
           return (
             <Polygon
               key={zone.id}
-              positions={zone.coordinates}
+              positions={polygonPositions}
               pathOptions={{
                 color: color,
                 weight: isSelected ? 3 : 2,
@@ -133,6 +166,12 @@ export default function EmissionZoneMap({ zones, selectedZone, onZoneSelect }: E
                   console.log(`🖱️ Clicked zone: ${zone.name}`);
                   onZoneSelect(zone);
                 },
+                add: () => {
+                  console.log(`✅ Polygon successfully added to map: ${zone.name} (${isMultiPolygon ? 'multi' : 'single'}-polygon)`);
+                },
+                error: (error) => {
+                  console.error(`❌ Error adding polygon ${zone.name}:`, error);
+                }
               }}
             >
               <Popup>
