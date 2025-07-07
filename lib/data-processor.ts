@@ -222,7 +222,16 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
     const regulations = xmlDoc.querySelectorAll('urbanVehicleAccessRegulation');
     console.log(`🏙️ Found ${regulations.length} emission zones`);
     
-    const allZones: EmissionZone[] = [];
+    // Tijdelijke structuur om polygonen per stad te verzamelen
+    const cityPolygons: Map<string, {
+      id: string;
+      cityName: string;
+      zoneType: 'ZE' | 'LEZ';
+      startDate: string;
+      infoUrl: string;
+      authority: string;
+      coordinates: [number, number][][]; // Array van polygon coordinate arrays
+    }> = new Map();
     
     // Process each regulation
     regulations.forEach((regulation, index) => {
@@ -238,18 +247,26 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
         return;
       }
       
-      // Find all location conditions with polygons - probeer verschillende methoden
+      // Extract gemeenschappelijke metadata
+      const zoneType = extractZoneType(cityName);
+      const validityCondition = trafficRegulation.querySelector('conditions[type="tro:ValidityCondition"]');
+      const startTimeElement = validityCondition?.querySelector('overallStartTime');
+      const startDate = startTimeElement?.textContent || '';
+      const urlElement = regulation.querySelector('urlForFurtherInformation');
+      const infoUrl = urlElement?.textContent || '';
+      const authorityElement = regulation.querySelector('issuingAuthority value[lang="nl"]');
+      const authority = authorityElement?.textContent || '';
+      
+      // Find all location conditions with polygons
       let locationConditions = trafficRegulation.querySelectorAll('conditions[type="tro:LocationCondition"]');
       console.log(`📍 Found ${locationConditions.length} location conditions for ${cityName}`);
       
       if (locationConditions.length === 0) {
-        // Probeer zonder namespace prefix
         locationConditions = trafficRegulation.querySelectorAll('conditions[type="LocationCondition"]');
         console.log(`🔍 Found ${locationConditions.length} LocationCondition (no namespace) for ${cityName}`);
       }
       
       if (locationConditions.length === 0) {
-        // Probeer alle conditions die "Location" bevatten
         const allConditions = trafficRegulation.querySelectorAll('conditions');
         console.log(`🔍 Found ${allConditions.length} total conditions for ${cityName}`);
         
@@ -263,12 +280,27 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
         console.log(`🔍 Found ${locationConditions.length} filtered location conditions`);
       }
       
-      // Als we nog steeds geen location conditions hebben, gebruik alle conditions
       if (locationConditions.length === 0) {
         console.log(`⚠️ No location conditions found, using all conditions for ${cityName}`);
         locationConditions = trafficRegulation.querySelectorAll('conditions');
       }
       
+      // Initialiseer stad data als het nog niet bestaat
+      if (!cityPolygons.has(cityName)) {
+        cityPolygons.set(cityName, {
+          id: regulation.getAttribute('id') || `zone_${index}`,
+          cityName,
+          zoneType,
+          startDate,
+          infoUrl,
+          authority,
+          coordinates: []
+        });
+      }
+      
+      const cityData = cityPolygons.get(cityName)!;
+      
+      // Verzamel alle polygonen voor deze stad
       Array.from(locationConditions).forEach((locationCondition, conditionIndex) => {
         console.log(`🗺️ Processing condition ${conditionIndex} for ${cityName}...`);
         
@@ -280,7 +312,6 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
         console.log(`📍 Found ${polygons.length} gmlPolygon elements`);
         
         if (polygons.length === 0) {
-          // Zoek naar alle elementen die polygon-gerelateerde tag namen hebben
           const allElements = locationCondition.querySelectorAll('*');
           const polygonElements = Array.from(allElements).filter(el => 
             el.tagName.toLowerCase().includes('polygon')
@@ -290,7 +321,6 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
         }
         
         if (polygons.length === 0) {
-          // Zoek naar alle elementen die "polygon" bevatten (case insensitive)
           const allElements = locationCondition.querySelectorAll('*');
           const polygonElements = Array.from(allElements).filter(el => 
             el.tagName.toLowerCase().includes('polygon') || 
@@ -301,12 +331,10 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
         }
         
         if (polygons.length === 0) {
-          // Als laatste redmiddel, zoek naar posList elementen
           const posLists = locationCondition.querySelectorAll('posList');
           console.log(`📍 Found ${posLists.length} posList elements directly`);
           
           if (posLists.length > 0) {
-            // Maak fake polygon objecten voor elke posList
             const fakePolygons = Array.from(posLists).map(posList => {
               const fakePolygon = document.createElement('div');
               fakePolygon.appendChild(posList.cloneNode(true));
@@ -317,24 +345,22 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
           }
         }
         
+        // Verwerk elke polygon en voeg coordinaten toe aan de stad
         Array.from(polygons).forEach((polygon, polygonIndex) => {
           console.log(`🔺 Processing polygon ${polygonIndex} for ${cityName}...`);
           
-          // Zoek naar posList op verschillende manieren
           let posListElement = polygon.querySelector('posList');
           
           if (!posListElement) {
-            // Probeer directe child als dit een fake polygon is
             posListElement = polygon.querySelector('posList') || 
                             Array.from(polygon.children).find(child => child.tagName === 'posList') as Element;
           }
           
           if (!posListElement) {
-            // Zoek in alle descendants
             const allDescendants = polygon.querySelectorAll('*');
             const foundElement = Array.from(allDescendants).find(el => 
               el.tagName.toLowerCase().includes('poslist') || 
-              (el.textContent?.trim().split(/\s+/).length || 0) > 10  // Veel getallen = waarschijnlijk coordinaten
+              (el.textContent?.trim().split(/\s+/).length || 0) > 10
             );
             posListElement = foundElement || null;
           }
@@ -350,39 +376,9 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
               console.log(`📍 Parsed ${coordinates.length} coordinates for ${cityName} polygon ${polygonIndex}`);
               
               if (coordinates.length > 0) {
-                // Determine zone type based on name
-                const zoneName = polygons.length > 1 ? `${cityName} (Deel ${polygonIndex + 1})` : cityName;
-                const zoneType = extractZoneType(cityName);
-                
-                // Extract validity period
-                const validityCondition = trafficRegulation.querySelector('conditions[type="tro:ValidityCondition"]');
-                const startTimeElement = validityCondition?.querySelector('overallStartTime');
-                const startDate = startTimeElement?.textContent || '';
-                
-                // Extract URL for more information
-                const urlElement = regulation.querySelector('urlForFurtherInformation');
-                const infoUrl = urlElement?.textContent || '';
-                
-                // Extract issuing authority
-                const authorityElement = regulation.querySelector('issuingAuthority value[lang="nl"]');
-                const authority = authorityElement?.textContent || '';
-                
-                const zone: EmissionZone = {
-                  id: `${regulation.getAttribute('id')}_${polygonIndex}`,
-                  name: zoneName,
-                  city: authority || extractCity(cityName),
-                  type: zoneType,
-                  status: determineStatus(startDate),
-                  validFrom: startDate,
-                  coordinates,
-                  restrictions: ['Dieselvoertuigen', 'Oude voertuigen'], // Default restrictions
-                  exemptions: ['Elektrische voertuigen', 'Waterstof voertuigen', 'Oldtimers'],
-                  url: infoUrl,
-                  authority: authority || extractCity(cityName)
-                };
-                
-                console.log(`✅ Successfully processed zone: ${zone.name} (${coordinates.length} coordinates)`);
-                allZones.push(zone);
+                // Voeg deze polygon coordinaten toe aan de stad
+                cityData.coordinates.push(coordinates);
+                console.log(`✅ Added polygon with ${coordinates.length} coordinates to ${cityName}`);
               }
             }
           }
@@ -390,7 +386,34 @@ export async function processEmissionZonesData(): Promise<EmissionZone[]> {
       });
     });
     
-    console.log(`🎉 Total zones processed: ${allZones.length}`);
+    // Converteer de verzamelde data naar EmissionZone objecten
+    const allZones: EmissionZone[] = [];
+    
+    cityPolygons.forEach((cityData, cityName) => {
+      if (cityData.coordinates.length > 0) {
+        // Combineer alle polygon coordinaten in één grote array
+        const allCoordinates: [number, number][] = cityData.coordinates.flat();
+        
+        const zone: EmissionZone = {
+          id: cityData.id,
+          name: cityName,
+          city: cityData.authority || extractCity(cityName),
+          type: cityData.zoneType,
+          status: determineStatus(cityData.startDate),
+          validFrom: cityData.startDate,
+          coordinates: allCoordinates,
+          restrictions: ['Dieselvoertuigen', 'Oude voertuigen'],
+          exemptions: ['Elektrische voertuigen', 'Waterstof voertuigen', 'Oldtimers'],
+          url: cityData.infoUrl,
+          authority: cityData.authority || extractCity(cityName)
+        };
+        
+        console.log(`🏛️ Created combined zone: ${zone.name} with ${cityData.coordinates.length} polygons and ${allCoordinates.length} total coordinates`);
+        allZones.push(zone);
+      }
+    });
+    
+    console.log(`🎉 Total combined zones processed: ${allZones.length}`);
     return allZones;
     
   } catch (error) {
