@@ -75,8 +75,8 @@ De app bevat emissiezones voor o.a.:
 
 1. **Clone de repository**
 ```bash
-git clone https://github.com/jordenvanderhoogt/nederland-emissiezones-app.git
-cd nederland-emissiezones-app
+git clone https://github.com/webforce-studio/nederlandse-emissiezones-app.git
+cd nederlandse-emissiezones-app
 ```
 
 2. **Install dependencies**
@@ -224,7 +224,7 @@ Dit project is gelicenseerd onder de MIT License - zie het [LICENSE](LICENSE) be
 
 **Jord van der Hoogt**
 - Email: [jord@cenex.nl](mailto:jord@cenex.nl)
-- GitHub: [@jordenvanderhoogt](https://github.com/jordenvanderhoogt)
+- GitHub: [@webforce-studio](https://github.com/webforce-studio)
 - LinkedIn: [/in/jordvanderhoogt](https://linkedin.com/in/jordvanderhoogt)
 
 ---
